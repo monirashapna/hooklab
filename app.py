@@ -10,7 +10,7 @@ import os
 import streamlit as st
 
 from hooklab import __version__, prompts
-from hooklab.generator import DEFAULT_MODEL, HookGenerator
+from hooklab.generator import PROVIDERS, HookGenerator
 
 st.set_page_config(page_title="HookLab", page_icon="🎣", layout="centered")
 
@@ -38,21 +38,29 @@ if APP_PASSWORD and not st.session_state.get("unlocked"):
             st.error("Wrong password.")
     st.stop()
 
-# ---------- API key ----------
-api_key = get_setting("ANTHROPIC_API_KEY")
-model = get_setting("HOOKLAB_MODEL", DEFAULT_MODEL)
+# ---------- AI provider + key ----------
+# Gemini (free) is used when GEMINI_API_KEY is set; Claude when only ANTHROPIC_API_KEY is set.
+gemini_key = get_setting("GEMINI_API_KEY")
+claude_key = get_setting("ANTHROPIC_API_KEY")
+if gemini_key:
+    provider, api_key = "gemini", gemini_key
+elif claude_key:
+    provider, api_key = "claude", claude_key
+else:
+    provider, api_key = "gemini", ""
+model = get_setting("HOOKLAB_MODEL", PROVIDERS[provider])
 
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
     if not api_key:
         api_key = st.text_input(
-            "Anthropic API key",
+            "Gemini API key (free)",
             type="password",
-            help="Get one at console.anthropic.com. For a shared team link, set it in the app's secrets instead.",
+            help="Get a free key at aistudio.google.com. For a shared team link, set it in the app's secrets instead.",
         )
     else:
         st.success("API key loaded")
-    st.caption(f"Model: `{model}`")
+    st.caption(f"AI: {provider.title()} · `{model}`")
     st.caption(f"HookLab v{__version__}")
 
 
@@ -84,7 +92,7 @@ def show_results(hooks, tag_label: str, file_prefix: str):
 
 def run(fn, **kwargs):
     if not api_key:
-        st.warning("Add your Anthropic API key in the sidebar first.")
+        st.warning("Add your Gemini API key in the sidebar first.")
         return None
     try:
         with st.spinner("Cooking up hooks..."):
@@ -115,7 +123,7 @@ with tab_viral:
         if not topic.strip():
             st.warning("Please enter a topic.")
         else:
-            gen = HookGenerator(api_key, model) if api_key else None
+            gen = HookGenerator(api_key, provider, model) if api_key else None
             result = run(
                 gen.viral_hooks if gen else None,
                 topic=topic, platform=platform, tone=tone,
@@ -145,7 +153,7 @@ with tab_news:
         if not content.strip():
             st.warning("Please enter the news topic or content.")
         else:
-            gen = HookGenerator(api_key, model) if api_key else None
+            gen = HookGenerator(api_key, provider, model) if api_key else None
             result = run(
                 gen.news_hooks if gen else None,
                 content=content, tone=n_tone, language=n_language,
