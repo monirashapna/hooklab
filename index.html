@@ -106,6 +106,7 @@
   .msg { border-radius: 12px; padding: 12px 14px; margin-top: 16px; font-size: 14px; }
   .msg.err { background: var(--err-bg); color: var(--err-ink); }
   .msg.warn { background: var(--warn-bg); color: var(--warn-ink); }
+  .msg.ok { background: color-mix(in srgb, var(--ok) 12%, transparent); color: var(--ok); }
 
   .results { margin-top: 28px; }
   .results-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -152,6 +153,11 @@
   .load:hover { border-color: var(--news); filter: brightness(1.08); }
   .load:disabled { opacity: .6; cursor: wait; }
   .paste .drop { margin-top: 8px; }
+  .seg-viral input:checked + span { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .load-viral { background: var(--accent); border-color: var(--accent); }
+  .load-viral:hover { border-color: var(--accent); }
+  .extract-msg .msg { margin: -6px 0 16px; }
+  .extracted { font-size: 13px; color: var(--ok); margin: 6px 0 0; font-weight: 500; }
   .drop { display: flex; align-items: center; gap: 14px; border: 2px dashed var(--line); border-radius: 14px; padding: 18px; cursor: pointer; font-weight: 400; font-size: 14px; transition: border-color .15s, background .15s; }
   .drop:hover, .drop.over { border-color: var(--news); background: var(--news-soft); }
   .drop-icon { font-size: 28px; }
@@ -205,8 +211,28 @@
   <!-- Variation 1 -->
   <form class="card panel" id="panel-viral" autocomplete="off">
     <div class="field">
-      <label for="v-topic">Topic</label>
+      <div class="seg seg-viral" role="radiogroup">
+        <label><input type="radio" name="v-mode" value="write" checked><span>✍️ Write it</span></label>
+        <label><input type="radio" name="v-mode" value="link"><span>🔗 Extract from link</span></label>
+      </div>
+    </div>
+    <div class="link-box" id="v-linkbox" hidden>
+      <div class="field">
+        <label for="v-url">Article or post link</label>
+        <div class="link-row">
+          <input type="text" id="v-url" placeholder="https://… (news site, X, Facebook, YouTube…)" spellcheck="false">
+          <button class="ghost load load-viral" type="button" id="v-extract">Extract</button>
+        </div>
+      </div>
+      <div class="extract-msg" id="v-extract-msg"></div>
+    </div>
+    <div class="field">
+      <label for="v-topic" id="v-topic-label">Topic</label>
       <textarea id="v-topic" placeholder="e.g. Saving money on a small salary" required></textarea>
+    </div>
+    <div class="field" id="v-source-field">
+      <label for="v-source">Source <span class="opt">(optional)</span></label>
+      <input type="text" id="v-source" placeholder="e.g. Prothom Alo, BBC News, X · @username, Facebook · Page name">
     </div>
     <div class="grid four field">
       <div><label for="v-platform">Platform</label><select id="v-platform"></select></div>
@@ -226,8 +252,28 @@
   <!-- Variation 2 -->
   <form class="card panel" id="panel-news" autocomplete="off" hidden>
     <div class="field">
-      <label for="n-content">News topic or content</label>
+      <div class="seg seg-news" role="radiogroup">
+        <label><input type="radio" name="n-mode" value="write" checked><span>✍️ Write it</span></label>
+        <label><input type="radio" name="n-mode" value="link"><span>🔗 Extract from link</span></label>
+      </div>
+    </div>
+    <div class="link-box" id="n-linkbox" hidden>
+      <div class="field">
+        <label for="n-url">Article or post link</label>
+        <div class="link-row">
+          <input type="text" id="n-url" placeholder="https://… (news site, X, Facebook, YouTube…)" spellcheck="false">
+          <button class="ghost load load-news" type="button" id="n-extract">Extract</button>
+        </div>
+      </div>
+      <div class="extract-msg" id="n-extract-msg"></div>
+    </div>
+    <div class="field">
+      <label for="n-content" id="n-content-label">News topic or content</label>
       <textarea id="n-content" rows="6" placeholder="Paste the news summary or full article here..." required></textarea>
+    </div>
+    <div class="field" id="n-source-field">
+      <label for="n-source">Source <span class="opt">(optional)</span></label>
+      <input type="text" id="n-source" placeholder="e.g. Prothom Alo, BBC News, X · @username, Facebook · Page name">
     </div>
     <div class="grid four field">
       <div><label for="n-tone">Tone</label><select id="n-tone"></select></div>
@@ -386,15 +432,20 @@ Output format: JSON Lines. Write one JSON object per line, one line per headline
 (no array, no code fences, no commentary). Each line exactly like:
 {"hook": "...", "visual_text": "...", "angle": "..."}`;
 
-function viralPrompt({ topic, platform, tone, language, count, audience }) {
+const SOURCE_RULE = src => `Source: ${src} (you may credit it where it feels natural; never mention any other source)`;
+function viralPrompt({ topic, platform, tone, language, count, audience = "", source = "" }) {
   const lines = [`Topic: ${topic.trim()}`, `Platform: ${platform}`, `Tone: ${tone}`, `Write in: ${LANGUAGES[language] || language}`];
   if (audience.trim()) lines.push(`Target audience: ${audience.trim()}`);
+  if (source.trim()) lines.push(SOURCE_RULE(source.trim()));
   lines.push(`Write ${count} different hooks.`);
   return lines.join("\n");
 }
-function newsPrompt({ content, tone, platform, language, count }) {
-  return ["News content:", '"""', content.trim(), '"""', `Tone: ${tone}`, `Platform: ${platform}`,
-          `Write in: ${LANGUAGES[language] || language}`, `Write ${count} different headlines.`].join("\n");
+function newsPrompt({ content, tone, platform, language, count, source = "" }) {
+  const lines = ["News content:", '"""', content.trim(), '"""', `Tone: ${tone}`, `Platform: ${platform}`,
+                 `Write in: ${LANGUAGES[language] || language}`];
+  if (source.trim()) lines.push(SOURCE_RULE(source.trim()));
+  lines.push(`Write ${count} different headlines.`);
+  return lines.join("\n");
 }
 
 /* ---------- Storage (wrapped: some browsers block it) ---------- */
@@ -421,7 +472,7 @@ function toHook(it, tagKey) {
 }
 
 /* Streams the reply and calls onHook(hook) as soon as each line is complete. Returns the full text. */
-async function streamGemini(system, user, tagKey, onHook) {
+async function streamGemini(system, user, tagKey, onHook, extra = {}) {   // extra: { tools, temperature }
   const { models, noThinking } = SPEEDS[speed];
   // Different Gemini generations accept different "think less" settings. Try them in order,
   // and remember which one worked for each model so later requests go straight to it.
@@ -432,7 +483,7 @@ async function streamGemini(system, user, tagKey, onHook) {
     const saved = store.get(memoKey);
     const options = saved ? [JSON.parse(saved)] .concat(THINK_OPTIONS) : THINK_OPTIONS;
     for (const think of options) {
-      const generationConfig = { temperature: 1.0 };
+      const generationConfig = { temperature: extra.temperature ?? 1.0 };
       if (think) generationConfig.thinkingConfig = think;
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`, {
         method: "POST",
@@ -441,6 +492,7 @@ async function streamGemini(system, user, tagKey, onHook) {
           systemInstruction: { parts: [{ text: system }] },
           contents: [{ role: "user", parts: [{ text: user }] }],
           generationConfig,
+          ...(extra.tools ? { tools: extra.tools } : {}),
         }),
       }).catch(() => { throw new FriendlyError("Couldn't reach Google. Check your internet connection and try again."); });
 
@@ -612,11 +664,12 @@ async function generate(form, mode) {
     if (mode === "viral") {
       raw = await streamGemini(VIRAL_SYSTEM, viralPrompt({
         topic: $("#v-topic").value, platform: $("#v-platform").value, tone: $("#v-tone").value,
-        language: $("#v-lang").value, count: $("#v-count").value, audience: $("#v-audience").value }), tagKey, onHook);
+        language: $("#v-lang").value, count: $("#v-count").value, audience: $("#v-audience").value,
+        source: sourceFor("v") }), tagKey, onHook);
     } else {
       raw = await streamGemini(NEWS_SYSTEM, newsPrompt({
         content: $("#n-content").value, tone: $("#n-tone").value, platform: $("#n-platform").value,
-        language: $("#n-lang").value, count: $("#n-count").value }), tagKey, onHook);
+        language: $("#n-lang").value, count: $("#n-count").value, source: sourceFor("n") }), tagKey, onHook);
     }
     lastResults[mode] = streamed.length ? streamed : parseHooks(raw, tagKey);
     if (streamed.length) {
@@ -636,6 +689,88 @@ async function generate(form, mode) {
 }
 $("#panel-viral").addEventListener("submit", e => { e.preventDefault(); generate(e.target, "viral"); });
 $("#panel-news").addEventListener("submit", e => { e.preventDefault(); generate(e.target, "news"); });
+
+/* ================= Extract from link ================= */
+const EXTRACT_SYSTEM = `You read a web page or social media post and pull out what a social media writer needs.
+Use only what is actually on the page. Never guess facts.`;
+const extractPrompt = url => `Open and read this link: ${url}
+
+Return JSON only (no code fences, no extra text):
+{"source": "...", "context": "..."}
+
+- source: the publication or platform as people know it, e.g. "Prothom Alo", "The Daily Star", "BBC News",
+  "X (Twitter)", "Facebook", "YouTube". For a social media post, add the account if visible, like "X · @username"
+  or "Facebook · Page Name".
+- context: the key facts in 3 to 6 sentences, in the page's own language: who, what, when, where, and any numbers.
+  Leave out ads, menus and unrelated stories.
+- If you can't open or read the page, return {"error": "short reason"}.`;
+
+const PLATFORM_HOSTS = [
+  [/(^|\.)(x|twitter)\.com$/, "X (Twitter)"], [/(^|\.)(facebook\.com|fb\.com|fb\.watch)$/, "Facebook"],
+  [/(^|\.)instagram\.com$/, "Instagram"], [/(^|\.)(youtube\.com|youtu\.be)$/, "YouTube"],
+  [/(^|\.)tiktok\.com$/, "TikTok"], [/(^|\.)linkedin\.com$/, "LinkedIn"], [/(^|\.)threads\.(net|com)$/, "Threads"],
+];
+function sourceFromUrl(u) {
+  const host = new URL(u).hostname.replace(/^(www|m|mobile|web)\./, "");
+  return PLATFORM_HOSTS.find(([re]) => re.test(host))?.[1] || host;
+}
+const modeOf = p => document.querySelector(`input[name="${p}-mode"]:checked`).value;
+const sourceFor = p => $(`#${p}-source`).value;
+
+const LINK_UI = {
+  v: { box: "#v-topic", label: "#v-topic-label", write: ["Topic", "e.g. Saving money on a small salary"] },
+  n: { box: "#n-content", label: "#n-content-label", write: ["News topic or content", "Paste the news summary or full article here..."] },
+};
+["v", "n"].forEach(p => {
+  document.querySelectorAll(`input[name="${p}-mode"]`).forEach(r => r.onchange = () => {
+    const link = modeOf(p) === "link";
+    $(`#${p}-linkbox`).hidden = !link;
+    $(LINK_UI[p].label).textContent = link ? "Context" : LINK_UI[p].write[0];
+    $(LINK_UI[p].box).placeholder = link ? "Click Extract to fill this in, or paste the post text here" : LINK_UI[p].write[1];
+    if (link) $(`#${p}-url`).focus();
+  });
+  $(`#${p}-extract`).onclick = () => extractLink(p);
+  $(`#${p}-url`).addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); extractLink(p); } });
+});
+
+async function extractLink(p) {
+  const slot = $(`#${p}-extract-msg`);
+  const say = (text, kind) => slot.innerHTML = text ? `<div class="msg ${kind}">${text}</div>` : "";
+  say("");
+  let url = $(`#${p}-url`).value.trim();
+  if (!url) return say("Paste a link first.", "err");
+  if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+  let okLink = false;
+  try { okLink = !/\s/.test(url) && new URL(url).hostname.includes("."); } catch {}
+  if (!okLink) return say("That doesn't look like a valid link.", "err");
+  if (!apiKey) { dlg.showModal(); return; }
+
+  const btn = $(`#${p}-extract`);
+  btn.disabled = true; btn.textContent = "Reading…";
+  const fallbackSource = sourceFromUrl(url);
+  const fillSource = s => { $(`#${p}-source`).value = s; $(`#${p}-source-field`).hidden = false; };
+  try {
+    const raw = await streamGemini(EXTRACT_SYSTEM, extractPrompt(url), "", () => {},
+                                   { tools: [{ url_context: {} }], temperature: 0.2 });
+    let data = {};
+    const m = raw.replace(/```(?:json)?/gi, "").match(/\{[\s\S]*\}/);
+    try { data = m ? JSON.parse(m[0]) : {}; } catch {}
+    const context = String(data.context || "").trim();
+    if (data.error || !context) {
+      fillSource(fallbackSource);
+      say(`Couldn't read this page${data.error ? ` (${esc(String(data.error))})` : ""}. X and Facebook often block outside readers.
+           The source is filled in, so just paste the post text into <b>Context</b> below.`, "warn");
+      $(LINK_UI[p].box).focus();
+      return;
+    }
+    fillSource(String(data.source || "").trim() || fallbackSource);
+    $(LINK_UI[p].box).value = context;
+    say(`✓ Extracted. Check the context and source, then generate.`, "ok");
+  } catch (err) {
+    fillSource(fallbackSource);
+    say(esc(err instanceof FriendlyError ? err.message : "Couldn't read that link: " + err.message), "err");
+  } finally { btn.disabled = false; btn.textContent = "Extract"; }
+}
 
 /* ================= Bulk (Sheet) mode ================= */
 fill("#b-tone", NEWS_TONES); fill("#b-lang", Object.keys(LANGUAGES)); fill("#b-platform", PLATFORMS);
