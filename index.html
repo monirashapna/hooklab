@@ -470,13 +470,18 @@ let apiKey = store.get("hooklab_gemini_key");
 /* ---------- Gemini ---------- */
 // Each speed tries its models in order (later ones are fallbacks if a model name isn't available).
 const SPEEDS = {
-  fast:    { models: ["gemini-flash-lite-latest", "gemini-2.5-flash-lite", "gemini-flash-latest"], noThinking: true },
-  quality: { models: ["gemini-flash-latest", "gemini-2.5-flash"], noThinking: false },
+  fast:    { models: ["gemini-flash-lite-latest", "gemini-2.5-flash-lite", "gemini-flash-latest", "gemini-2.5-flash"], noThinking: true },
+  quality: { models: ["gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest", "gemini-2.5-flash-lite"], noThinking: false },
 };
 let speed = store.get("hooklab_speed") === "quality" ? "quality" : "fast";
 
 class FriendlyError extends Error {}
 class RateLimitError extends FriendlyError {}
+
+// Tell the page we're retrying (buttons listen and show it). Free Gemini models get "high demand" spikes.
+const BUSY_WAITS = [2, 5];   // seconds to wait between full rounds of models
+function announce(msg) { document.dispatchEvent(new CustomEvent("hooklab-busy", { detail: msg })); }
+const isBusy = (status, msg) => [500, 502, 503, 504].includes(status) || /high demand|overloaded|unavailable|try again later/i.test(msg);
 
 function toHook(it, tagKey) {
   if (typeof it === "string") return { hook: it.trim(), visual_text: "", tag: "" };
@@ -489,7 +494,15 @@ async function streamGemini(system, user, tagKey, onHook, extra = {}) {   // ext
   // Different Gemini generations accept different "think less" settings. Try them in order,
   // and remember which one worked for each model so later requests go straight to it.
   const THINK_OPTIONS = noThinking ? [{ thinkingBudget: 0 }, { thinkingLevel: "low" }, null] : [null];
-  let lastErr;
+  let lastErr, sawBusy = false, sawLimit = false;
+  for (let round = 0; round <= BUSY_WAITS.length; round++) {
+  if (round > 0) {
+    if (!sawBusy && !sawLimit) break;                       // nothing worth retrying
+    const wait = BUSY_WAITS[round - 1];
+    for (let s = wait; s > 0; s--) { announce(`Google is busy, retrying in ${s}s…`); await new Promise(r => setTimeout(r, 1000)); }
+    announce("Retrying…");
+    sawBusy = sawLimit = false;
+  }
   for (const model of models) {
     const memoKey = `hooklab_think_${model}`;
     const saved = store.get(memoKey);
@@ -511,7 +524,8 @@ async function streamGemini(system, user, tagKey, onHook, extra = {}) {   // ext
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         const msg = body.error?.message || res.statusText;
-        if (res.status === 429) throw new RateLimitError("Free limit reached for now. Wait a minute and try again.");
+        if (isBusy(res.status, msg)) { lastErr = msg; sawBusy = true; break; }      // this model is overloaded → next model
+        if (res.status === 429) { lastErr = msg; sawLimit = true; break; }        // limits are per model → next model
         if (/api key/i.test(msg)) throw new FriendlyError("This API key isn't valid. Click the key button at the top and paste it again.");
         if (res.status === 403) throw new FriendlyError("Google refused this key. Make sure it was created at aistudio.google.com.");
         if (res.status === 400 && think) { lastErr = msg; store.set(memoKey, ""); continue; } // setting not accepted → try the next one
@@ -546,9 +560,14 @@ async function streamGemini(system, user, tagKey, onHook, extra = {}) {   // ext
         }
       }
       flushLine(lineBuf);
+      announce("");
       return full;
     }
   }
+  }
+  announce("");
+  if (sawLimit && !sawBusy) throw new RateLimitError("Free limit reached for now. Wait a minute and try again.");
+  if (sawBusy || sawLimit) throw new FriendlyError("Google's free AI is very busy right now. Please wait a minute and try again.");
   throw new FriendlyError(`Google returned an error: ${lastErr}`);
 }
 
@@ -657,7 +676,7 @@ async function generate(form, mode) {
   if (!apiKey) { dlg.showModal(); return; }
   const btn = form.querySelector(".go");
   const label = btn.textContent;
-  btn.disabled = true; btn.textContent = "Cooking up hooks…";
+  btn.disabled = true; btn.textContent = btn.dataset.working = "Cooking up hooks…";
   $("#results").hidden = false; $("#resultsTitle").textContent = "Writing…"; $("#newsNote").hidden = true;
   const list = $("#list");
   list.className = "list" + (mode === "news" ? " is-news" : "");
@@ -779,7 +798,7 @@ async function extractLink(p) {
   if (!apiKey) { dlg.showModal(); return; }
 
   const btn = $(`#${p}-extract`);
-  btn.disabled = true; btn.textContent = "Reading…";
+  btn.disabled = true; btn.textContent = btn.dataset.working = "Reading…";
   const fallbackSource = sourceFromUrl(url);
   const fillSource = s => { $(`#${p}-source`).value = s; $(`#${p}-source-field`).hidden = false; };
   try {
@@ -1090,6 +1109,11 @@ $("#b-csv").onclick = () => {
   const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: "hooklab-bulk.csv" });
   a.click(); URL.revokeObjectURL(a.href);
 };
+/* While Google is busy, show the retry countdown on whichever button is working */
+document.addEventListener("hooklab-busy", e => {
+  document.querySelectorAll("button[data-working]:disabled").forEach(b => b.textContent = e.detail || b.dataset.working);
+  if (bulk?.running && e.detail) $("#b-status").textContent = e.detail;
+});
 </script>
 </body>
 </html>
